@@ -104,12 +104,31 @@ trap cleanup EXIT
 info "==> 1/6 解析版本"
 API="https://api.github.com/repos/${REPO}/releases"
 if [[ "${VERSION}" == "latest" ]]; then
-  RELEASE_JSON="$(curl -fsSL --connect-timeout 15 --retry 3 "${API}/latest")" \
-    || die "无法访问 GitHub Releases（检查网络或代理）"
+  RELEASE_URL="${API}/latest"
 else
-  RELEASE_JSON="$(curl -fsSL --connect-timeout 15 --retry 3 "${API}/tags/v${VERSION}")" \
-    || die "找不到版本 v${VERSION}"
+  RELEASE_URL="${API}/tags/v${VERSION}"
 fi
+
+# 用 -w 区分「404 还没发版」和「真的连不上」，否则会把发版缺失报成网络问题，
+# 用户会去查代理，实际只是维护者还没传包。
+HTTP_CODE="$(curl -sSL -o "${WORK}/release.json" -w '%{http_code}' \
+  --connect-timeout 15 --retry 3 "${RELEASE_URL}" 2>/dev/null || echo "000")"
+
+case "${HTTP_CODE}" in
+  200) RELEASE_JSON="$(cat "${WORK}/release.json")" ;;
+  404)
+    if [[ "${VERSION}" == "latest" ]]; then
+      die "还没有发布任何版本。
+   请维护者先上传安装包：见源码仓库 scripts/release_publish.sh
+   发行页: https://github.com/${REPO}/releases" 1
+    else
+      die "找不到版本 v${VERSION}
+   可用版本: https://github.com/${REPO}/releases" 1
+    fi
+    ;;
+  000) die "无法连接 GitHub（检查网络或代理）" 1 ;;
+  *)   die "访问 GitHub Releases 失败（HTTP ${HTTP_CODE}）" 1 ;;
+esac
 
 # 从 release JSON 抓 DMG 资产名与下载地址（避免依赖 jq）。
 # GitHub 返回紧凑 JSON（字段间无换行），且不同 client 可能给 http/https，
